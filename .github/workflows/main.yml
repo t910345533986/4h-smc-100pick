@@ -2,7 +2,7 @@ name: Hourly Crypto Hunter
 
 on:
   schedule:
-    - cron: '5 * * * *'  # 每 4 小時的第 5 分鐘執行一次
+    - cron: '5 */4 * * *'  # 每 4 小時的第 5 分鐘執行一次
   workflow_dispatch:      # 允許手動點擊執行
 
 jobs:
