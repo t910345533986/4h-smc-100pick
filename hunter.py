@@ -69,7 +69,7 @@ class BingXStructureHunterV37_CloudFix:
 
     def find_swing_points(self, df, lookback=100):
         """
-        修改點：增加失效判斷邏輯。
+        增加失效判斷邏輯。
         當高點被後續的 High 突破，或低點被後續的 Low 跌破，虛線即停止。
         """
         highs, lows = [], []
@@ -77,11 +77,9 @@ class BingXStructureHunterV37_CloudFix:
         h_vals, l_vals = df['H'].values, df['L'].values
         last_idx = len(df) - 1
         
-        # 1. 找出所有波段高低點
+        # 1. 找出所有波波段高低點
         for i in range(lookback, len(df) - lookback):
-            # 判斷是否為局部高點
             if h_vals[i] == h_vals[i-lookback : i+lookback+1].max():
-                # 尋找失效點：從 i+1 開始往後找，直到有價格超過此高點
                 expiry = last_idx
                 for j in range(i + 1, len(df)):
                     if h_vals[j] > h_vals[i]:
@@ -89,9 +87,7 @@ class BingXStructureHunterV37_CloudFix:
                         break
                 highs.append({'index': i, 'price': h_vals[i], 'time': df['Time'].iloc[i], 'expiry': expiry})
                 
-            # 判斷是否為局部低點
             if l_vals[i] == l_vals[i-lookback : i+lookback+1].min():
-                # 尋找失效點：從 i+1 開始往後找，直到有價格跌破此低點
                 expiry = last_idx
                 for j in range(i + 1, len(df)):
                     if l_vals[j] < l_vals[i]:
@@ -102,23 +98,17 @@ class BingXStructureHunterV37_CloudFix:
         return highs, lows
 
     def process_liquidity_logic(self, df, highs, lows):
-        """
-        判斷最新一根 K 棒是否正在執行獵殺 (Sweep)
-        """
         sigs = []
         last_idx = len(df) - 1
         curr = df.iloc[last_idx]
 
         for h in highs:
-            # 只有當「失效點」就是當前這一根時，代表正在發生突破或獵殺
             if h['expiry'] == last_idx:
-                # 獵殺高點：影線高於結構價，但收盤低於(或等於)結構價
                 if curr['H'] > h['price'] and curr['C'] <= h['price']:
                     sigs.append({'idx': last_idx, 'time': curr['Time'], 'type': 'Short', 'price': h['price']})
 
         for l in lows:
             if l['expiry'] == last_idx:
-                # 獵殺低點：影線低於結構價，但收盤高於(或等於)結構價
                 if curr['L'] < l['price'] and curr['C'] >= l['price']:
                     sigs.append({'idx': last_idx, 'time': curr['Time'], 'type': 'Long', 'price': l['price']})
         return sigs
@@ -140,20 +130,16 @@ class BingXStructureHunterV37_CloudFix:
 
         plot_start_t = plot_df['Time'].iloc[0]
         
-        # 繪製高點虛線
         for h in highs:
             h_end_t = df.iloc[h['expiry']]['Time']
-            if h_end_t < plot_start_t: continue # 完全在畫面外的就不畫
-            
-            start_x = time_to_idx.get(h['time'], 0) # 若起點在畫面外，從最左邊開始畫
+            if h_end_t < plot_start_t: continue
+            start_x = time_to_idx.get(h['time'], 0)
             end_x = time_to_idx.get(h_end_t, max_idx_plot)
             ax.hlines(h['price'], xmin=start_x, xmax=end_x, color='red', linestyle='--', alpha=0.5, linewidth=1.5)
 
-        # 繪製低點虛線
         for l in lows:
             l_end_t = df.iloc[l['expiry']]['Time']
             if l_end_t < plot_start_t: continue
-            
             start_x = time_to_idx.get(l['time'], 0)
             end_x = time_to_idx.get(l_end_t, max_idx_plot)
             ax.hlines(l['price'], xmin=start_x, xmax=end_x, color='cyan', linestyle='--', alpha=0.5, linewidth=1.5)
@@ -166,25 +152,30 @@ class BingXStructureHunterV37_CloudFix:
                 ax.text(idx, y_pos, " NOW SWEEP!", color='#fbbf24', fontweight='bold', ha='center', 
                         va='bottom' if s['type']=='Short' else 'top', fontsize=12)
 
-        ax.set_title(f"{symbol} 4H Structure Hunter (Candlestick)", color='white', fontsize=18)
+        ax.set_title(f"{symbol} 4H Structure Hunter", color='white', fontsize=18)
         ax.grid(True, alpha=0.05)
         self.upload_plot_to_discord(fig, symbol, "Sweep")
         plt.close(fig)
 
 if __name__ == "__main__":
     hunter = BingXStructureHunterV37_CloudFix()
-    if hunter.get_bingx_symbols(100):
-        print("🚀 正在檢查 4H 最新 K 棒 (結構自動失效模式)...")
+    # 修改點：設定掃描數量為 500
+    if hunter.get_bingx_symbols(500):
+        print(f"🚀 正在檢查 4H 最新 K 棒 (目標數量: {len(hunter.targets)} 幣種)...")
         found = False
         for s in tqdm(hunter.targets):
             df, status = hunter.fetch_data_bingx(s, '4h', 500)
             if df is not None:
-                # 這裡的 100 是 lookback，代表左右各 100 根 K 線內的高低點
                 h, l = hunter.find_swing_points(df, 100)
                 sigs = hunter.process_liquidity_logic(df, h, l)
                 if sigs:
                     hunter.visualize_and_upload(df, s, sigs, h, l)
                     found = True
+            # 加入微小延遲防止 API 封鎖
+            time.sleep(0.05)
         
         if not found:
             print("本週期無獵殺信號。")
+            hunter.send_discord_report("🔍 4H 週期掃描完成：目前市場無獵殺信號。")
+        else:
+            hunter.send_discord_report(f"✅ 4H 週期掃描完成，已上傳信號圖表。")
